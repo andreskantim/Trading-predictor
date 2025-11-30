@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 import time
 from multiprocessing import Pool, cpu_count
+from tqdm import tqdm
 
 # Agregar directorio padre al path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -91,7 +92,7 @@ if __name__ == '__main__':
     print("OPTIMIZACIÓN IN-SAMPLE")
     print("="*70)
 
-    train_df = df[(df.index.year >= 2016) & (df.index.year < 2020)]
+    train_df = df[(df.index.year >= 2018) & (df.index.year < 2022)]
     best_lookback, best_real_pf = optimize_donchian(train_df)
 
     # Calcular cumulative returns de la estrategia real
@@ -122,47 +123,25 @@ if __name__ == '__main__':
     # Crear argumentos
     args_list = [(i, train_df_dict, best_real_pf) for i in range(n_permutations)]
 
-    # Procesar con multiprocessing
-    start_time = time.time()
-    last_update = start_time
-    update_interval = 1
-
     print("="*70)
     print("PROGRESO")
     print("="*70)
     print(f"  Inicio: {time.strftime('%H:%M:%S')}")
     print("="*70 + "\n")
-    sys.stdout.flush()
 
-    results = []
+    start_time = time.time()
+    results = []  # lista para almacenar resultados
+
+    # Procesamiento con multiprocessing y barra de progreso
     with Pool(processes=n_workers) as pool:
-        for i, result in enumerate(pool.imap_unordered(process_permutation_simple, args_list), 1):
+        for result in tqdm(pool.imap_unordered(process_permutation_simple, args_list),
+                        total=len(args_list),
+                        desc="Procesando tareas",
+                        ncols=80):
             results.append(result)
 
-            # Actualizar progreso
-            current_time = time.time()
-            if current_time - last_update >= update_interval or i == len(args_list):
-                elapsed = current_time - start_time
-                completed = i
-                total = len(args_list)
-                percentage = (completed / total) * 100
-                speed = completed / elapsed if elapsed > 0 else 0
-                eta = (total - completed) / speed if speed > 0 else 0
-
-                # Barra visual
-                bar_width = 40
-                filled = int(bar_width * completed / total)
-                bar = '█' * filled + '░' * (bar_width - filled)
-
-                print(f"\r[{bar}] {completed}/{total} ({percentage:5.1f}%) | "
-                      f"{speed:.1f} tareas/s | "
-                      f"Tiempo: {elapsed:.0f}s | "
-                      f"ETA: {eta:.0f}s", end='')
-                sys.stdout.flush()
-                last_update = current_time
-
-    print("\n")
     total_time = time.time() - start_time
+    print(f"\nTiempo total: {total_time:.0f}s")
 
     # Análisis de resultados
     permuted_pfs = [pf for pf, _, _ in results]

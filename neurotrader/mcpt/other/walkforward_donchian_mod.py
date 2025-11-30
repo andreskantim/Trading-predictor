@@ -13,6 +13,8 @@ import sys
 from pathlib import Path
 import time
 from multiprocessing import Pool, cpu_count
+from tqdm import tqdm
+
 
 # Agregar directorio padre al path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -39,8 +41,8 @@ def process_walkforward_permutation(args):
         columns=df_dict['columns']
     )
 
-    # Ejecutar permutación
-    wf_perm = get_permutation(df_perm, start_index=train_window)
+    # Ejecutar permutación CON SEED para reproducibilidad
+    wf_perm = get_permutation(df_perm, start_index=train_window, seed=perm_i)
 
     # Calcular returns y señales
     wf_perm['r'] = np.log(wf_perm['close']).diff().shift(-1)
@@ -85,19 +87,11 @@ if __name__ == '__main__':
     print("Cargando datos...")
     df = pd.read_parquet(BITCOIN_PARQUET)
     df.index = df.index.astype('datetime64[s]')
-    df = df[(df.index.year >= 2016) & (df.index.year < 2021)]
-    print(f"✓ Datos cargados: {len(df)} filas (2016-2020)\n")
+    df = df[(df.index.year >= 2018) & (df.index.year < 2024)]
+    print(f"✓ Datos cargados: {len(df)} filas (2018-2022)\n")
 
     # Configuración walk-forward
-    # Ajustar train_window para que sea máximo 60% de los datos disponibles
-    max_train_window = int(len(df) * 0.6)
-    desired_train_window = 24 * 365 * 4  # 4 years of hourly data
-
-    if desired_train_window > max_train_window:
-        train_window = max_train_window
-        print(f"⚠️  Train window ajustado de {desired_train_window} a {train_window} (datos insuficientes)\n")
-    else:
-        train_window = desired_train_window
+    train_window = 24 * 365 * 4  # 4 years of hourly data
 
     print("="*70)
     print("ANÁLISIS WALK-FORWARD")
@@ -108,6 +102,7 @@ if __name__ == '__main__':
     # Calcular estrategia real
     df['r'] = np.log(df['close']).diff().shift(-1)
     df['donch_wf_signal'] = walkforward_donch(df, train_lookback=train_window)
+    print(df['donch_wf_signal'])
     donch_rets = df['donch_wf_signal'] * df['r']
     real_wf_pf = donch_rets[donch_rets > 0].sum() / donch_rets[donch_rets < 0].abs().sum()
     real_cum_rets = donch_rets.cumsum()
@@ -117,7 +112,7 @@ if __name__ == '__main__':
     sys.stdout.flush()
 
     # MCPT
-    n_permutations = 1000
+    n_permutations = 200
     print(f"Ejecutando Walk-Forward MCPT con {n_permutations} permutaciones usando {n_workers} workers...")
     print()
     sys.stdout.flush()
@@ -135,45 +130,26 @@ if __name__ == '__main__':
 
     # Procesar con multiprocessing
     start_time = time.time()
-    last_update = start_time
-    update_interval = 1
 
     print("="*70)
     print("PROGRESO")
     print("="*70)
     print(f"  Inicio: {time.strftime('%H:%M:%S')}")
     print("="*70 + "\n")
-    sys.stdout.flush()
 
-    results = []
+    n_tasks = len(args_list)
+    results = []  # crea la lista vacía donde se guardarán los resultados
+
     with Pool(processes=n_workers) as pool:
-        for i, result in enumerate(pool.imap_unordered(process_walkforward_permutation, args_list), 1):
+        # tqdm envuelve pool.imap_unordered para mostrar progreso
+        for result in tqdm(pool.imap_unordered(process_walkforward_permutation, args_list),
+                        total=n_tasks,
+                        desc="Procesando tareas",
+                        ncols=80):
             results.append(result)
 
-            # Actualizar progreso
-            current_time = time.time()
-            if current_time - last_update >= update_interval or i == len(args_list):
-                elapsed = current_time - start_time
-                completed = i
-                total = len(args_list)
-                percentage = (completed / total) * 100
-                speed = completed / elapsed if elapsed > 0 else 0
-                eta = (total - completed) / speed if speed > 0 else 0
-
-                # Barra visual
-                bar_width = 40
-                filled = int(bar_width * completed / total)
-                bar = '█' * filled + '░' * (bar_width - filled)
-
-                print(f"\r[{bar}] {completed}/{total} ({percentage:5.1f}%) | "
-                      f"{speed:.1f} tareas/s | "
-                      f"Tiempo: {elapsed:.0f}s | "
-                      f"ETA: {eta:.0f}s", end='')
-                sys.stdout.flush()
-                last_update = current_time
-
-    print("\n")
     total_time = time.time() - start_time
+    print(f"\nTiempo total: {total_time:.0f}s")
 
     # Análisis de resultados
     permuted_pfs = [pf for pf, _, _ in results]
